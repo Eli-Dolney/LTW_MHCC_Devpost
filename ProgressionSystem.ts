@@ -1,9 +1,9 @@
 import * as hz from 'horizon/core';
 
 export const ProgressionEvents = {
-  xpGained: new hz.LocalEvent<{player: hz.Player, amount: number, source: string, skillType?: string}>('xpGained'),
+  xpGained: new hz.NetworkEvent<{player: hz.Player, amount: number, source: string, skillType?: string}>('xpGained'),
   levelUp: new hz.LocalEvent<{player: hz.Player, newLevel: number, previousLevel: number, skillType?: string}>('levelUp'),
-  progressionUpdated: new hz.LocalEvent<{player: hz.Player, currentXP: number, currentLevel: number, xpToNextLevel: number, skillType?: string}>('progressionUpdated'),
+  progressionUpdated: new hz.NetworkEvent<{player: hz.Player, currentXP: number, currentLevel: number, xpToNextLevel: number, skillType?: string}>('progressionUpdated'),
   skillUnlocked: new hz.LocalEvent<{player: hz.Player, skillName: string, skillType: string}>('skillUnlocked'),
   tierUpgraded: new hz.LocalEvent<{player: hz.Player, newTier: string, previousTier: string}>('tierUpgraded'),
   newIslandDiscovered: new hz.LocalEvent<{player: hz.Player, islandName: string}>('newIslandDiscovered'),
@@ -60,7 +60,7 @@ export class ProgressionSystem extends hz.Component<typeof ProgressionSystem> {
     autoSaveInterval: { type: hz.PropTypes.Number, default: 30000 },
     
     // Time tracking
-    timeTrackingInterval: { type: hz.PropTypes.Number, default: 60000 }, // 1 minute
+    timeTrackingInterval: { type: hz.PropTypes.Number, default: 5000 }, // 5 seconds
   };
 
   private playerData: Map<hz.Player, ProgressionData> = new Map();
@@ -118,11 +118,10 @@ export class ProgressionSystem extends hz.Component<typeof ProgressionSystem> {
   ];
 
   start() {
-    // Set up auto-save timer
-    this.saveTimer = this.connectLocalBroadcastEvent(hz.World.onUpdate, this.onUpdate.bind(this));
-    
-    // Set up time tracking
-    this.timeTrackingTimer = this.connectLocalBroadcastEvent(hz.World.onUpdate, this.trackPlayTime.bind(this));
+    console.log('[ProgressionSystem] start() called');
+    this.async.setInterval(() => {
+      this.trackPlayTime({ deltaTime: 10 });
+    }, 10000); // every 10 seconds
   }
 
   private onUpdate(data: { deltaTime: number }) {
@@ -137,8 +136,8 @@ export class ProgressionSystem extends hz.Component<typeof ProgressionSystem> {
   }
 
   private trackPlayTime(data: { deltaTime: number }) {
+    console.log('[ProgressionSystem] trackPlayTime called', data);
     const currentTime = Date.now();
-    // Track all players in the world
     const players = this.world.getPlayers();
     players.forEach(player => {
       if (!this.playerJoinTimes.has(player)) {
@@ -146,14 +145,14 @@ export class ProgressionSystem extends hz.Component<typeof ProgressionSystem> {
       }
       const joinTime = this.playerJoinTimes.get(player)!;
       const playTime = currentTime - joinTime;
-      const minutesPlayed = Math.floor(playTime / 60000); // Convert to minutes
-      if (minutesPlayed > 0) {
-        // Award XP for time played (every minute)
-        this.addTimeXP(player, minutesPlayed);
+      // Award XP based on xpPerMinute property
+      const secondsPlayed = Math.floor(playTime / 1000); // seconds
+      if (secondsPlayed > 0) {
+        const xpToAward = Math.floor((this.props.xpPerMinute / 60) * secondsPlayed);
+        this.addTimeXP(player, xpToAward); // Award calculated XP
         this.playerJoinTimes.set(player, currentTime); // Reset timer
       }
     });
-    // Clean up players who are no longer in the world
     this.playerJoinTimes.forEach((joinTime, player) => {
       if (!players.includes(player)) {
         this.playerJoinTimes.delete(player);
@@ -163,8 +162,16 @@ export class ProgressionSystem extends hz.Component<typeof ProgressionSystem> {
 
   public getPlayerData(player: hz.Player): ProgressionData {
     if (!this.playerData.has(player)) {
+      // Load saved level from persistent variable if available
+      let savedLevel = 1;
+      if (this.world.persistentStorage && this.world.persistentStorage.getPlayerVariable) {
+        const loaded = this.world.persistentStorage.getPlayerVariable(player, "PlayerGr:Level");
+        if (typeof loaded === 'number' && !isNaN(loaded)) {
+          savedLevel = loaded;
+        }
+      }
       const newData: ProgressionData = {
-        overallLevel: 1,
+        overallLevel: savedLevel,
         overallXP: 0,
         totalPlayTime: 0,
         lastSaveTime: Date.now(),
@@ -196,12 +203,10 @@ export class ProgressionSystem extends hz.Component<typeof ProgressionSystem> {
   }
 
   public addXP(player: hz.Player, amount: number, source: string, skillType?: string) {
+    console.log('[ProgressionSystem] addXP called:', { player: player.name.get(), amount, source, skillType });
     const data = this.getPlayerData(player);
     const previousLevel = data.overallLevel;
-    
     data.overallXP += amount;
-    
-    // Add skill-specific XP
     if (skillType) {
       switch (skillType) {
         case 'movement':
@@ -218,51 +223,55 @@ export class ProgressionSystem extends hz.Component<typeof ProgressionSystem> {
           break;
       }
     }
-    
-    // Check for overall level up
     const xpNeededForNextLevel = this.getXPForLevel(data.overallLevel + 1);
+    // Debug log for XP math
+    console.log('[ProgressionSystem] XP check:', { overallXP: data.overallXP, xpNeededForNextLevel });
     while (data.overallXP >= xpNeededForNextLevel && data.overallLevel < this.props.maxLevel) {
       data.overallLevel++;
       data.overallXP -= xpNeededForNextLevel;
-      
-      // Emit level up event
       this.sendLocalEvent(this.entity, ProgressionEvents.levelUp, {
         player: player,
         newLevel: data.overallLevel,
         previousLevel: previousLevel,
         skillType: skillType
       });
-      
-      // Check for tier upgrade
+      // Sync leaderboard and persistent variable
+      const currentPersistentLevel = this.world.persistentStorage.getPlayerVariable(player, "PlayerGr:Level") ?? 1;
+      if (data.overallLevel !== currentPersistentLevel) {
+        // Update leaderboard (always override)
+        this.world.leaderboards.setScoreForPlayer('Level', player, data.overallLevel, true);
+        // Update persistent variable
+        this.world.persistentStorage.setPlayerVariable(player, "PlayerGr:Level", data.overallLevel);
+      }
       this.checkTierUpgrade(player, data.overallLevel);
-      
-      // Check for skill unlocks
       this.checkSkillUnlocks(player, data);
     }
-    
-    // Emit XP gained event
     this.sendLocalEvent(this.entity, ProgressionEvents.xpGained, {
       player: player,
       amount: amount,
       source: source,
       skillType: skillType
     });
-    
-    // Emit progression updated event
-    this.sendLocalEvent(this.entity, ProgressionEvents.progressionUpdated, {
+    // Debug log for progressionUpdated event
+    console.log('[ProgressionSystem] Sending progressionUpdated:', {
+      player: player.name.get(),
+      currentXP: data.overallXP,
+      currentLevel: data.overallLevel,
+      xpToNextLevel: this.getXPForLevel(data.overallLevel + 1) - data.overallXP,
+      skillType: skillType
+    });
+    this.sendNetworkEvent(player, ProgressionEvents.progressionUpdated, {
       player: player,
       currentXP: data.overallXP,
       currentLevel: data.overallLevel,
       xpToNextLevel: this.getXPForLevel(data.overallLevel + 1) - data.overallXP,
       skillType: skillType
     });
-    
     this.savePlayerData(player);
   }
 
-  private addTimeXP(player: hz.Player, minutesPlayed: number) {
-    const xpToAward = minutesPlayed * this.props.xpPerMinute;
-    this.addXP(player, xpToAward, 'time_played');
+  private addTimeXP(player: hz.Player, amount: number) {
+    this.addXP(player, amount, 'time_played');
   }
 
   public discoverIsland(player: hz.Player, islandName: string) {
@@ -466,11 +475,16 @@ export class ProgressionSystem extends hz.Component<typeof ProgressionSystem> {
   }
 
   public getXPForLevel(level: number): number {
-    return level * this.props.xpPerLevel;
+    // Exponential XP curve: each level requires 1.5x more XP than the previous
+    return Math.floor(this.props.xpPerLevel * Math.pow(1.5, level - 1));
   }
 
   private savePlayerData(player: hz.Player) {
     const data = this.getPlayerData(player);
+    // Save to persistent variable for leaderboard linkage
+    if (this.world.persistentStorage && this.world.persistentStorage.setPlayerVariable) {
+      this.world.persistentStorage.setPlayerVariable(player, "PlayerGr:Level", data.overallLevel);
+    }
     console.log(`[ProgressionSystem] Saved data for ${player.name.get()}:`, {
       overallLevel: data.overallLevel,
       overallXP: data.overallXP,
