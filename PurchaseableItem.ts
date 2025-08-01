@@ -41,6 +41,9 @@ export class PurchaseableItem<T> extends hz.Component<typeof PurchaseableItem & 
   }
 
   protected onPurchaseSuccess(player: hz.Player) {
+    // Consume the price item (e.g., Apple Pie) from the player's inventory
+    WorldInventory.consumeItemForPlayer(player, this.props.priceSKU, this.props.priceAmount);
+    // Grant the purchased item (e.g., Gems)
     WorldInventory.grantItemToPlayer(player, this.props.itemSKU, this.props.itemAmount);
     this.sendNetworkBroadcastEvent(PurchaseableItemEvents.OnReceiveItem, { player: player, itemSKU: this.props.itemSKU, itemAmount: this.props.itemAmount });
     this.updateText("", false);
@@ -68,6 +71,26 @@ export class PurchaseableItem<T> extends hz.Component<typeof PurchaseableItem & 
           this.props.errorTxt.as(TextGizmo).visible.set(false);
         }
       }, 3000);
+    }
+  }
+
+  // Sell all pies in inventory for gems
+  public sellAllPies(player: hz.Player) {
+    // Only applies if this item is a pie-to-gem trade
+    if (this.props.priceSKU && this.props.itemSKU) {
+      hz.WorldInventory.getPlayerEntitlementQuantity(player, this.props.priceSKU).then((pieCount) => {
+        const piesToSell = Number(pieCount);
+        if (piesToSell > 0) {
+          // Consume all pies
+          hz.WorldInventory.consumeItemForPlayer(player, this.props.priceSKU, piesToSell);
+          // Grant gems (gems per pie = this.props.itemAmount / this.props.priceAmount)
+          const gemsPerPie = this.props.itemAmount / this.props.priceAmount;
+          const gemsToGrant = piesToSell * gemsPerPie;
+          hz.WorldInventory.grantItemToPlayer(player, this.props.itemSKU, gemsToGrant);
+          this.sendNetworkBroadcastEvent(PurchaseableItemEvents.OnReceiveItem, { player: player, itemSKU: this.props.itemSKU, itemAmount: gemsToGrant });
+          this.sendNetworkBroadcastEvent(PurchaseableItemEvents.OnInventoryChanged, { player: player });
+        }
+      });
     }
   }
 }

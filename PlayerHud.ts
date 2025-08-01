@@ -4,16 +4,17 @@ import { PurchaseableItemEvents } from 'PurchaseableItem';
 import { SimpleLootItemEvents } from 'SimpleLootItem';
 
 class PlayerHud extends UIComponent {
+
   static propsDefinition = {
-    currency1Name: {type: hz.PropTypes.String},
-    currency1SKU: {type: hz.PropTypes.String},
-    currency1Texture: {type: hz.PropTypes.Asset},
-    currency2Name: {type: hz.PropTypes.String},
-    currency2SKU: {type: hz.PropTypes.String},
-    currency2Texture: {type: hz.PropTypes.Asset},
-    currency3Name: {type: hz.PropTypes.String},
-    currency3SKU: {type: hz.PropTypes.String},
-    currency3Texture: {type: hz.PropTypes.Asset},
+    currency1Name: { type: hz.PropTypes.String },
+    currency1SKU: { type: hz.PropTypes.String },
+    currency1Texture: { type: hz.PropTypes.Asset },
+    currency2Name: { type: hz.PropTypes.String },
+    currency2SKU: { type: hz.PropTypes.String },
+    currency2Texture: { type: hz.PropTypes.Asset },
+    currency3Name: { type: hz.PropTypes.String },
+    currency3SKU: { type: hz.PropTypes.String },
+    currency3Texture: { type: hz.PropTypes.Asset },
   };
 
   private currency1CountBinding: Binding<number> = new Binding(0);
@@ -21,8 +22,19 @@ class PlayerHud extends UIComponent {
   private currency3CountBinding: Binding<number> = new Binding(0);
   private owner: hz.Player | undefined = undefined;
 
+  // Position constants for easy adjustment
+  private static readonly MOBILE_TOP_POSITION = 90;
+  private static readonly MOBILE_RIGHT_POSITION = 60;
+
+  private static readonly DESKTOP_TOP_POSITION = 120;
+  private static readonly DESKTOP_RIGHT_POSITION = 29;
+
+  // Platform-specific position values as Bindings
+  private topPositionBinding: Binding<number> = new Binding(0);
+  private rightPositionBinding: Binding<number> = new Binding(0);
+
   preStart() {
-    this.connectNetworkBroadcastEvent(SimpleLootItemEvents.OnPickupLoot, ({player, sku, count}) => {
+    this.connectNetworkBroadcastEvent(SimpleLootItemEvents.OnPickupLoot, ({ player, sku, count }) => {
       if (this.owner === player) {
         this.async.setTimeout(() => {
           hz.WorldInventory.getPlayerEntitlementQuantity(player, this.props.currency1SKU).then(quantity => {
@@ -32,7 +44,7 @@ class PlayerHud extends UIComponent {
       }
 
     })
-    this.connectNetworkBroadcastEvent(PurchaseableItemEvents.OnReceiveItem, ({player, itemSKU, itemAmount}) => {
+    this.connectNetworkBroadcastEvent(PurchaseableItemEvents.OnReceiveItem, ({ player, itemSKU, itemAmount }) => {
       if (this.owner === player) {
         this.async.setTimeout(() => {
           hz.WorldInventory.getPlayerEntitlementQuantity(player, itemSKU).then(quantity => {
@@ -41,7 +53,7 @@ class PlayerHud extends UIComponent {
         }, 1500);
       }
     });
-    this.connectNetworkBroadcastEvent(PurchaseableItemEvents.OnConsumeItem, ({player, itemSKU, itemAmount}) => {
+    this.connectNetworkBroadcastEvent(PurchaseableItemEvents.OnConsumeItem, ({ player, itemSKU, itemAmount }) => {
       if (this.owner === player) {
         this.async.setTimeout(() => {
           hz.WorldInventory.getPlayerEntitlementQuantity(player, itemSKU).then(quantity => {
@@ -50,7 +62,7 @@ class PlayerHud extends UIComponent {
         }, 1500);
       }
     });
-    this.connectNetworkBroadcastEvent(PurchaseableItemEvents.OnInventoryChanged, ({player}) => {
+    this.connectNetworkBroadcastEvent(PurchaseableItemEvents.OnInventoryChanged, ({ player }) => {
       if (this.owner === player) {
         this.async.setTimeout(() => {
           this.updateUI();
@@ -58,22 +70,36 @@ class PlayerHud extends UIComponent {
       }
     })
 
+    this.connectNetworkBroadcastEvent(hz.InWorldShopHelpers.OnPlayerPurchasedItemEvent, (payload) => {
+      const player = payload.playerId
+      if (this.owner && this.owner.id === player) {
+        this.async.setTimeout(() => {
+          this.updateUI();
+        }, 1500);
+      }
+    });
+
     // Add your own event listeners for players receiving or consuming items here
 
   }
 
-  updateUI(){
+  updateUI() {
     if (this.owner !== undefined && this.owner !== this.world.getServerPlayer()) {
       hz.WorldInventory.getPlayerEntitlements(this.owner).then(entitlements => {
         entitlements.forEach((entitlement) => {
           this.updateForSKU(entitlement.sku, entitlement.quantity);
         });
       });
+
+      // Set platform-specific position values
+      const isMobile = this.world.getLocalPlayer().deviceType.get() === hz.PlayerDeviceType.Mobile;
+      this.topPositionBinding.set(isMobile ? PlayerHud.MOBILE_TOP_POSITION : PlayerHud.DESKTOP_TOP_POSITION);
+      this.rightPositionBinding.set(isMobile ? PlayerHud.MOBILE_RIGHT_POSITION : PlayerHud.DESKTOP_RIGHT_POSITION);
     }
 
   }
 
-  updateForSKU(sku: string, quantity: number){
+  updateForSKU(sku: string, quantity: number) {
     if (sku === this.props.currency1SKU) {
       this.currency1CountBinding.set(Number(quantity));
     }
@@ -98,20 +124,22 @@ class PlayerHud extends UIComponent {
 
       this.connectCodeBlockEvent(this.owner, hz.CodeBlockEvents.OnItemPurchaseComplete, (player, item, success) => {
         console.log(player.name.get() + " purchased " + item + " with success: " + success);
-      } )
+      })
     }
 
   }
 
   initializeUI(): UINode {
+    const children: UINode[] = [];
 
-    return View ({
-      children: [
+    // Only add currency displays if textures are provided
+    if (this.props.currency1Texture) {
+      children.push(
         View({
           children: [
             Image({
               source: ImageSource.fromTextureAsset(this.props.currency1Texture),
-              style: { height: 40, width: 40 }
+              style: { height: 50, width: 50 } // Adjust size as needed
             }),
             Text({
               text: this.currency1CountBinding.derive((count) => {
@@ -127,7 +155,12 @@ class PlayerHud extends UIComponent {
           style: {
             flexDirection: 'row',
           }
-        }),
+        })
+      );
+    }
+
+    if (this.props.currency2Texture) {
+      children.push(
         View({
           children: [
             Image({
@@ -148,7 +181,12 @@ class PlayerHud extends UIComponent {
           style: {
             flexDirection: 'row',
           }
-        }),
+        })
+      );
+    }
+
+    if (this.props.currency3Texture) {
+      children.push(
         View({
           children: [
             Image({
@@ -169,20 +207,23 @@ class PlayerHud extends UIComponent {
           style: {
             flexDirection: 'row',
           }
-
         })
+      );
+    }
 
-
-      ],
+    return View({
+      children: children,
       style: {
         backgroundColor: 'rgba(0,0,0,0.8)',
         width: 100,
-        top: 142,
+        position: 'absolute',
+        top: this.topPositionBinding,
+        right: this.rightPositionBinding,
         margin: 20,
         padding: 5,
         borderRadius: 5
       }
-    })
+    });
   }
 }
 hz.Component.register(PlayerHud);

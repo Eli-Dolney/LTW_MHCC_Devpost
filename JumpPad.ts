@@ -1,5 +1,4 @@
 import * as hz from 'horizon/core';
-import { ProgressionSystem } from './ProgressionSystem';
 
 export const JumpPadEvents = {
   playerLaunched: new hz.NetworkEvent<{player: hz.Player, launchVelocity: hz.Vec3}>('playerLaunched'),
@@ -22,7 +21,6 @@ export class JumpPad extends hz.Component<typeof JumpPad> {
     idleVFX: {type: hz.PropTypes.Entity},
     idleSFX: {type: hz.PropTypes.Entity},
     debugMode: {type: hz.PropTypes.Boolean, default: false},
-    progressionSystem: {type: hz.PropTypes.Entity}, // Reference to progression system
   };
 
   private triggerEnter?: hz.EventSubscription;
@@ -122,18 +120,6 @@ export class JumpPad extends hz.Component<typeof JumpPad> {
       jumpPad: this.entity,
       player: player
     });
-    
-    // Award XP to the player if progression system is available
-    if (this.props.progressionSystem) {
-      const progressionSystem = this.props.progressionSystem.getComponents(ProgressionSystem)[0];
-      if (progressionSystem) {
-        progressionSystem.awardJumpXP(player);
-        if (this.props.debugMode) {
-          console.log(`[JumpPad] Awarded XP to player ${player.name.get()}`);
-        }
-      }
-    }
-    
     if (this.props.debugMode) {
       console.log(`[JumpPad] Launched player ${player.name.get()} with velocity:`, launchVelocity);
     }
